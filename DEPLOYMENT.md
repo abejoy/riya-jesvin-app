@@ -2,543 +2,468 @@
 
 ## Quick Start for Local Development
 
-### Option 1: Native Node.js (Recommended for Development)
+### Native Node.js (Development)
 
 ```bash
 # Terminal 1: Backend
 cd ourstory-api
-cp .env.example .env
 npm install
-npm run migrate
 npm run dev
 # Runs on http://localhost:3001
 
 # Terminal 2: Frontend
 cd ourstory-frontend
-cp .env.local.example .env.local
 npm install
 npm run dev
 # Runs on http://localhost:3000
 ```
 
-### Option 2: Docker Compose (Recommended for Production)
-
-```bash
-# From project root
-docker-compose up -d
-
-# View logs
-docker-compose logs -f api
-docker-compose logs -f frontend
-
-# Stop
-docker-compose down
-```
+Both services run with hot-reload enabled.
 
 ---
 
-## Production Deployment
+## Production Deployment on Ubuntu with Docker
 
 ### Architecture
 
-```
-                    Your Domain
-                        |
-        ┌───────────────┼───────────────┐
-        |               |               |
-    Nginx PM        Nginx PM       Domain DNS
-    (Port 443)      (Port 443)
-        |               |
-    [Frontend]     [Backend]
-     (Pi/Home)      (Ubuntu)
-     Port 8088      Port 3001
-```
+Both frontend and backend run in Docker containers on a single Ubuntu machine, managed via systemd services.
 
----
-
-## Backend Deployment (Ubuntu/Debian)
+```
+Ubuntu Server (e.g., 192.168.1.100)
+├── Docker Compose (ourstory.service)
+│   ├── Frontend (Next.js) → Port 3000
+│   │   └── Volumes: ./uploads, ./data
+│   └── Backend (Fastify) → Port 3001
+│       └── Database: sqlite3
+├── Data Persistence
+│   ├── /home/jesvin/Pictures → /uploads (Docker mount)
+│   ├── ~/ourstory/data/db.sqlite → Database volume
+│   └── ~/ourstory/.env → Secrets
+└── Service Control
+    ├── sudo systemctl start ourstory.service
+    ├── sudo systemctl stop ourstory.service
+    └── sudo systemctl status ourstory.service
+```
 
 ### Prerequisites
 
 - Ubuntu 20.04 LTS or newer
-- Node.js 18+
-- Nginx Proxy Manager instance
-- Domain configured in DNS
+- Docker & Docker Compose installed
+- sudo access
+- `/home/jesvin/Pictures` directory (or modify path)
+- ~1GB free disk space
 
-### Step 1: System Setup
+### Step 1: Install Docker & Docker Compose
 
 ```bash
 # Update system
 sudo apt update && sudo apt upgrade -y
 
-# Install Node.js (if not installed)
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
+# Install Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+rm get-docker.sh
+
+# Add user to docker group (optional, allows docker without sudo)
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Install Docker Compose (if not included)
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
 
 # Verify installation
-node --version  # Should be 18+
-npm --version   # Should be 9+
+docker --version
+docker-compose --version
 ```
 
-### Step 2: Create Service User
+### Step 2: Set Up Project Directory
 
 ```bash
-# Create dedicated user
-sudo useradd -r -s /bin/false ourstory
+# Create project directory
+mkdir -p ~/ourstory/{data,uploads}
+cd ~/ourstory
 
-# Create directories
-sudo mkdir -p /opt/ourstory-api
-sudo mkdir -p /var/lib/ourstory/{db,uploads}
+# Copy project files
+# Option A: Clone from git
+git clone <your-repo-url> .
 
-# Set permissions
-sudo chown -R ourstory:ourstory /opt/ourstory-api
-sudo chown -R ourstory:ourstory /var/lib/ourstory
+# Option B: Copy from dev machine
+scp -r your-local-project/* jesvin@ubuntu-ip:~/ourstory/
+
+# Verify structure
+ls -la ~/ourstory/
+# Should show: docker-compose.yml, ourstory-api/, ourstory-frontend/, etc.
 ```
 
-### Step 3: Install Application
+### Step 3: Configure Environment
 
 ```bash
-# Copy application files
-sudo cp -r ourstory-api/* /opt/ourstory-api/
-
-# Install dependencies
-cd /opt/ourstory-api
-sudo npm install --production
-
-# Create .env file
-sudo cp .env.example .env
-sudo nano .env  # Edit with your settings
-```
-
-### Step 4: Configure Environment
-
-Edit `/opt/ourstory-api/.env`:
-
-```env
+# Create backend .env
+cat > ~/ourstory/ourstory-api/.env << 'EOF'
 NODE_ENV=production
 PORT=3001
-DATABASE_PATH=/var/lib/ourstory/db.sqlite
-UPLOAD_DIR=/var/lib/ourstory/uploads
-JWT_SECRET=use-a-long-random-string-here-32+ characters
+DATABASE_PATH=/app/data/db.sqlite
+UPLOAD_DIR=/uploads
+JWT_SECRET=your-super-secret-jwt-key-change-this-32+chars
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=use-a-strong-password-here
-CORS_ORIGIN=https://ourstory.yourdomain.com
+ADMIN_PASSWORD=changeme
+CORS_ORIGIN=http://localhost:3000
 MAX_FILE_SIZE=10485760
-```
-
-### Step 5: Initialize Database
-
-```bash
-cd /opt/ourstory-api
-sudo -u ourstory npm run migrate
-
-# Verify
-sudo sqlite3 /var/lib/ourstory/db.sqlite "SELECT name FROM sqlite_master WHERE type='table';"
-```
-
-### Step 6: Create Systemd Service
-
-Copy the provided `ourstory-api.service` to systemd:
-
-```bash
-sudo cp ourstory-api.service /etc/systemd/system/
-
-# Enable and start
-sudo systemctl daemon-reload
-sudo systemctl enable ourstory-api
-sudo systemctl start ourstory-api
-
-# Check status
-sudo systemctl status ourstory-api
-
-# View logs
-sudo journalctl -u ourstory-api -f
-```
-
-### Step 7: Configure Nginx Proxy Manager
-
-1. Log in to Nginx Proxy Manager (usually on your network)
-2. Go to **Proxy Hosts**
-3. Click **Add Proxy Host**
-
-**Settings:**
-
-- Domain Names: `ourstory-api.yourdomain.com`
-- Scheme: `http`
-- Forward Hostname/IP: `your-ubuntu-local-ip` (e.g., `192.168.1.100`)
-- Forward Port: `3001`
-
-**SSL Tab:**
-
-- SSL Certificate: Select or create (Let's Encrypt recommended)
-- Force SSL: ✓ Enabled
-- HTTP/2 Support: ✓ Enabled
-
-**Advanced Tab:**
-
-```
-# Add if needed
-proxy_connect_timeout 600s;
-proxy_send_timeout 600s;
-proxy_read_timeout 600s;
-```
-
-**Custom Locations (optional, if many large uploads):**
-
-- Location: `/uploads`
-- Scheme: `http`
-- Forward Hostname/IP: `ubuntu-ip`
-- Forward Port: `3001`
-
-Click **Save** and test:
-
-```bash
-curl -I https://ourstory-api.yourdomain.com/api/health
-# Should return HTTP/2 200
-```
-
----
-
-## Frontend Deployment (Raspberry Pi / Home Assistant)
-
-### Prerequisites
-
-- Raspberry Pi with Home Assistant or Ubuntu
-- Nginx Proxy Manager instance
-- Domain configured in DNS
-
-### Step 1: Build Frontend on Dev Machine
-
-```bash
-# On your development machine
-cd ourstory-frontend
-
-# Update environment
-cat > .env.local << EOF
-NEXT_PUBLIC_API_URL=https://ourstory-api.yourdomain.com
 EOF
 
-# Build for static export
-npm run build
-
-# Verify output
-ls -la dist/
-# Should contain: index.html, _next/, public/, etc.
+# Update docker-compose.yml volumes
+# Ensure these lines exist:
+# - /home/jesvin/Pictures:/uploads
+# - ./data:/app/data
 ```
 
-### Step 2: Transfer to Raspberry Pi
+### Step 4: Initialize Database
 
 ```bash
-# Option A: SCP (Secure Copy)
-scp -r dist/* pi@raspberry-ip:/tmp/ourstory-dist/
+# Start services
+cd ~/ourstory
+docker-compose up -d
 
-# Option B: rsync (better for large files)
-rsync -avz dist/ pi@raspberry-ip:/opt/ourstory-frontend/
+# Wait for containers to be ready
+sleep 5
+
+# Check if database initialized
+docker exec ourstory-api ls -la /app/data/
+
+# View logs to confirm
+docker-compose logs api
 ```
 
-### Step 3: Setup on Raspberry Pi
+### Step 5: Create Systemd Service
+
+Create `/etc/systemd/system/ourstory.service`:
 
 ```bash
-# SSH to Pi
-ssh pi@raspberry-ip
-
-# Create directory
-sudo mkdir -p /opt/ourstory-frontend
-sudo chown $USER:$USER /opt/ourstory-frontend
-
-# If using SCP, copy files
-cp -r /tmp/ourstory-dist/* /opt/ourstory-frontend/
-
-# Verify
-ls /opt/ourstory-frontend/
-```
-
-### Step 4: Install Web Server
-
-#### Option A: Using `serve` (Easiest)
-
-```bash
-# Install globally
-sudo npm install -g serve
-
-# Test locally
-serve -s /opt/ourstory-frontend -l 8088
-
-# Create systemd service for serve
-sudo tee /etc/systemd/system/ourstory-frontend.service > /dev/null << 'EOF'
+sudo tee /etc/systemd/system/ourstory.service > /dev/null << 'EOF'
 [Unit]
-Description=Our Story Frontend
-After=network.target
+Description=Our Story Timeline Service
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
 
 [Service]
-Type=simple
-User=pi
-WorkingDirectory=/opt/ourstory-frontend
-ExecStart=/usr/local/bin/serve -s . -l 8088
-Restart=always
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/jesvin/ourstory
+
+# Start services
+ExecStart=/usr/local/bin/docker-compose up -d
+
+# Stop services
+ExecStop=/usr/local/bin/docker-compose down
+
+# Restart on failure
+Restart=on-failure
+RestartSec=10s
+
+User=jesvin
+Group=docker
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
+# Enable and start service
 sudo systemctl daemon-reload
-sudo systemctl enable ourstory-frontend
-sudo systemctl start ourstory-frontend
-sudo systemctl status ourstory-frontend
+sudo systemctl enable ourstory.service
+sudo systemctl start ourstory.service
+
+# Check status
+sudo systemctl status ourstory.service
 ```
 
-#### Option B: Using Nginx
+### Step 6: Verify Deployment
 
 ```bash
-# Install nginx
-sudo apt install -y nginx
+# Check containers running
+docker ps
 
-# Create config
-sudo tee /etc/nginx/sites-available/ourstory-frontend > /dev/null << 'EOF'
-server {
-    listen 8088;
-    server_name _;
-    root /opt/ourstory-frontend;
+# Check logs
+docker-compose logs -f
 
-    # Cache static assets
-    location /_next/static {
-        expires 30d;
-        add_header Cache-Control "public, max-age=2592000";
-    }
+# Test backend health
+curl http://localhost:3001/api/health
 
-    # SPA routing
-    location / {
-        try_files $uri /index.html;
-        add_header Cache-Control "no-cache, no-store, must-revalidate";
-    }
+# Test frontend
+curl -I http://localhost:3000
+# Should return HTTP/1.1 200
+```
 
-    # Manifest
-    location /manifest.json {
-        add_header Cache-Control "public, max-age=3600";
-    }
-}
+### Daily Operations
+
+**Start service:**
+
+```bash
+sudo systemctl start ourstory.service
+```
+
+**Stop service:**
+
+```bash
+sudo systemctl stop ourstory.service
+```
+
+**Restart service:**
+
+```bash
+sudo systemctl restart ourstory.service
+```
+
+**Check status:**
+
+```bash
+sudo systemctl status ourstory.service
+```
+
+**View logs:**
+
+```bash
+# All services
+docker-compose logs -f
+
+# Backend only
+docker-compose logs -f api
+
+# Frontend only
+docker-compose logs -f frontend
+
+# System service logs
+sudo journalctl -u ourstory.service -f
+```
+
+---
+
+## Setup Data Backups
+
+### Backup Script
+
+```bash
+# Create backup directory
+mkdir -p ~/ourstory-backups
+
+# Create backup script
+cat > ~/ourstory-backups/backup.sh << 'EOF'
+#!/bin/bash
+set -e
+
+BACKUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OURSTORY_DIR="$HOME/ourstory"
+DATA_DIR="$OURSTORY_DIR/data"
+UPLOADS_DIR="/home/jesvin/Pictures"
+DATE=$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="$BACKUP_DIR/ourstory-backup-$DATE.tar.gz"
+
+echo "Backing up Our Story data..."
+echo "Source: $DATA_DIR and $UPLOADS_DIR"
+echo "Target: $BACKUP_FILE"
+
+# Create backup
+tar -czf "$BACKUP_FILE" \
+  -C "$OURSTORY_DIR" data \
+  -C /home/jesvin Pictures
+
+# Keep last 30 days of backups
+find "$BACKUP_DIR" -name "ourstory-backup-*.tar.gz" -mtime +30 -delete
+
+echo "✓ Backup complete: $BACKUP_FILE"
+echo "✓ Size: $(du -h "$BACKUP_FILE" | cut -f1)"
 EOF
 
-# Enable site
-sudo ln -s /etc/nginx/sites-available/ourstory-frontend /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl restart nginx
+chmod +x ~/ourstory-backups/backup.sh
 ```
 
-### Step 5: Configure Nginx Proxy Manager
-
-1. Log in to Nginx Proxy Manager
-2. Go to **Proxy Hosts** → **Add Proxy Host**
-
-**Settings:**
-
-- Domain Names: `ourstory.yourdomain.com`
-- Scheme: `http`
-- Forward Hostname/IP: `your-pi-local-ip` (e.g., `192.168.1.50`)
-- Forward Port: `8088`
-
-**SSL Tab:**
-
-- SSL Certificate: Select or create (Let's Encrypt)
-- Force SSL: ✓ Enabled
-- HTTP/2 Support: ✓ Enabled
-
-Click **Save** and test:
+### Automated Daily Backups (Optional)
 
 ```bash
-curl -I https://ourstory.yourdomain.com
-# Should return HTTP/2 200
+# Add cron job (runs daily at 2 AM)
+crontab -e
+
+# Add this line:
+# 0 2 * * * $HOME/ourstory-backups/backup.sh >> $HOME/ourstory-backups/backup.log 2>&1
+```
+
+### Restore from Backup
+
+```bash
+# List available backups
+ls -lh ~/ourstory-backups/
+
+# Stop service
+sudo systemctl stop ourstory.service
+
+# Restore specific backup
+cd ~
+tar -xzf ~/ourstory-backups/ourstory-backup-20250210_020000.tar.gz
+
+# Restart service
+sudo systemctl start ourstory.service
+
+# Verify
+docker-compose logs api
 ```
 
 ---
 
 ## Post-Deployment Configuration
 
-### 1. Change Admin Password
+### 1. Change Admin Password (IMPORTANT!)
 
 After first deployment, immediately change the default password:
 
 ```bash
-# On Ubuntu server
-cd /opt/ourstory-api
+# Stop service
+sudo systemctl stop ourstory.service
 
 # Edit .env
-sudo nano .env
-# Change ADMIN_PASSWORD to a strong password
+nano ~/ourstory/ourstory-api/.env
+# Change ADMIN_PASSWORD=changeme to a strong password
 
-# Restart service
-sudo systemctl restart ourstory-api
-
-# Reinitialize database (optional, if needed)
-sudo -u ourstory npm run migrate
+# Start service
+sudo systemctl start ourstory.service
 ```
 
-Or change via API once logged in (implement password change endpoint).
+### 2. Change JWT Secret
 
-### 2. Test the Application
+For production, use a strong random JWT_SECRET:
+
+```bash
+# Generate random 32+ character secret
+openssl rand -base64 32
+
+# Update .env
+nano ~/ourstory/ourstory-api/.env
+# Paste generated value as JWT_SECRET=...
+
+# Restart service
+sudo systemctl restart ourstory.service
+```
+
+### 3. Test the Application
 
 ```bash
 # Health check
-curl https://ourstory-api.yourdomain.com/api/health
+curl http://localhost:3001/api/health
 
-# Login
-curl -X POST https://ourstory-api.yourdomain.com/api/auth/login \
+# Login test
+curl -X POST http://localhost:3001/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"changeme"}'
 
-# Get memories
-curl https://ourstory.yourdomain.com/api/memories
-
-# Visit frontend
-# https://ourstory.yourdomain.com → Should show timeline
-# https://ourstory.yourdomain.com/admin/login → Should show login
-```
-
-### 3. Setup Backups
-
-```bash
-# Ubuntu: Create backup script
-cat > /opt/backup-ourstory.sh << 'EOF'
-#!/bin/bash
-BACKUP_DIR="/backups/ourstory"
-mkdir -p $BACKUP_DIR
-DATE=$(date +%Y%m%d_%H%M%S)
-tar -czf $BACKUP_DIR/ourstory-$DATE.tar.gz /var/lib/ourstory/
-# Keep last 30 days
-find $BACKUP_DIR -mtime +30 -delete
-EOF
-
-chmod +x /opt/backup-ourstory.sh
-
-# Add cron job (daily at 2 AM)
-sudo crontab -e
-# Add: 0 2 * * * /opt/backup-ourstory.sh
+# View frontend
+# http://localhost:3000 → Should show timeline
+# http://localhost:3000/admin/login → Should show login page
 ```
 
 ### 4. Monitor Application
 
 ```bash
-# Check backend logs
-sudo journalctl -u ourstory-api -f
+# Check service status
+sudo systemctl status ourstory.service
 
-# Check frontend logs (if using serve)
-sudo journalctl -u ourstory-frontend -f
+# View combined logs
+docker-compose logs -f
 
 # Monitor disk usage
-df -h /var/lib/ourstory
-du -sh /var/lib/ourstory/uploads
+du -sh ~/ourstory/data
+du -sh /home/jesvin/Pictures
 
-# Monitor processes
-top -p $(pgrep -f "node src/server.js" | xargs)
+# Check container health
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ```
 
 ---
 
 ## Troubleshooting
 
+### Docker Service Issues
+
+```bash
+# Check if Docker is running
+sudo systemctl status docker
+
+# Restart Docker
+sudo systemctl restart docker
+
+# Check container status
+docker ps -a
+
+# View service logs
+sudo journalctl -u ourstory.service -f
+
+# Restart containers manually
+cd ~/ourstory && docker-compose restart
+
+# Check volume mounts
+docker inspect ourstory-frontend | grep -A 10 Mounts
+docker inspect ourstory-api | grep -A 10 Mounts
+```
+
 ### Backend Won't Start
 
 ```bash
-# Check logs
-sudo journalctl -u ourstory-api -n 50 -e
+# View API logs
+docker-compose logs api
 
-# Verify Node.js
-node --version
+# Check database file exists
+ls -la ~/ourstory/data/
 
-# Check port
-sudo lsof -i :3001
+# Check database integrity
+docker exec ourstory-api sqlite3 /app/data/db.sqlite ".tables"
 
-# Check database permissions
-ls -la /var/lib/ourstory/
-
-# Test manually
-cd /opt/ourstory-api
-NODE_ENV=production npm start
+# Test API manually
+docker exec ourstory-api curl http://localhost:3001/api/health
 ```
 
 ### Images Not Loading
 
 ```bash
-# Check upload directory
-ls -la /var/lib/ourstory/uploads
+# Check Photos directory mounted correctly
+docker exec ourstory-api ls -la /uploads
 
-# Check CORS
-curl -i -X OPTIONS https://ourstory-api.yourdomain.com/api/health \
-  -H "Origin: https://ourstory.yourdomain.com"
-# Should show Access-Control-Allow-Origin header
+# Check file permissions
+ls -la /home/jesvin/Pictures
 
-# Check .env CORS_ORIGIN
-grep CORS_ORIGIN /opt/ourstory-api/.env
+# Check CORS headers
+curl -i -X OPTIONS http://localhost:3001/api/health \
+  -H "Origin: http://localhost:3000"
 ```
 
 ### Frontend Blank/404
 
 ```bash
-# Check if files exist
-ls -la /opt/ourstory-frontend/
+# Check frontend logs
+docker-compose logs frontend
 
-# Check nginx config
-sudo nginx -t
+# Check if port is in use
+sudo lsof -i :3000
 
-# Restart serve/nginx
-sudo systemctl restart ourstory-frontend
-# or
-sudo systemctl restart nginx
+# Verify frontend container
+docker ps | grep frontend
+docker exec ourstory-frontend ps aux | grep next
 ```
 
-### Login Fails
+### Cannot Connect to API
 
 ```bash
-# Check database was initialized
-sudo sqlite3 /var/lib/ourstory/db.sqlite "SELECT username FROM admin_users;"
+# Check backend is running
+docker ps | grep api
 
-# Reinitialize if needed
-cd /opt/ourstory-api
-sudo -u ourstory npm run migrate
+# Check API is listening
+docker exec ourstory-api netstat -tlnp | grep 3001
 
-# Check admin credentials
-sudo cat /opt/ourstory-api/.env | grep ADMIN
+# Check Docker network
+docker network ls
+docker network inspect ourstory_default
+
+# Test from frontend container
+docker exec ourstory-frontend curl http://api:3001/api/health
 ```
-
----
-
-## Performance Optimization
-
-### Image Optimization
-
-Enable thumbnail generation in backend (optional):
-
-Edit `src/routes/uploads.js` to create thumbnails:
-
-```javascript
-// Generate thumbnail
-await sharp(buffer)
-  .resize(400, 300, { fit: "cover" })
-  .jpeg({ quality: 80 })
-  .toFile(thumbPath);
-```
-
-### Database Optimization
-
-```bash
-# Optimize database
-sudo sqlite3 /var/lib/ourstory/db.sqlite "VACUUM;"
-sudo sqlite3 /var/lib/ourstory/db.sqlite "ANALYZE;"
-
-# Check indexes
-sudo sqlite3 /var/lib/ourstory/db.sqlite ".indices"
-```
-
-### Caching
-
-Frontend PWA caching is configured in globals.css. For additional caching:
-
-1. **Long cache for static assets:**
-   - NPM can set Cache-Control headers on index.html and \_next folder
-
-2. **Backend caching:**
-   - Add `Cache-Control: max-age=300` to /api/memories responses
-   - Let /api/valentine cache for shorter period
 
 ---
 
@@ -546,42 +471,61 @@ Frontend PWA caching is configured in globals.css. For additional caching:
 
 ### Regular Tasks
 
+**Daily:**
+
+- Monitor logs for errors: `sudo journalctl -u ourstory.service -f`
+- Check disk usage: `du -sh ~/ourstory/data /home/jesvin/Pictures`
+
 **Weekly:**
 
-- Check disk usage
-- Review error logs
+- Run backups: `~/ourstory-backups/backup.sh`
+- Review error logs in containers
 
 **Monthly:**
 
-- Verify backups work
-- Test restore procedure
-- Update Node.js if patches available
+- Verify backups work by testing restore
+- Update Docker images: `docker-compose pull && docker-compose up -d`
+- Audit file permissions
 
 **Quarterly:**
 
-- Rotate admin passwords
-- Review and clean old images
-- Test disaster recovery
+- Change admin password
+- Review and clean old photos from /home/jesvin/Pictures
+- Test complete disaster recovery
 
-### Upgrade Procedure
+### System Updates
 
 ```bash
-# Backend upgrade
-sudo systemctl stop ourstory-api
-cd /opt/ourstory-api
-git pull  # or download new version
-npm install --production
-npm run migrate
-sudo systemctl start ourstory-api
+# Update Ubuntu packages
+sudo apt update && sudo apt upgrade -y
 
-# Frontend upgrade
-# Rebuild on dev machine
-cd ourstory-frontend
-npm install
-npm run build
-# Transfer dist/ to Pi
-rsync -avz dist/ pi@raspberry-ip:/opt/ourstory-frontend/
-sudo systemctl restart ourstory-frontend
+# Update Docker images
+cd ~/ourstory
+docker-compose pull
+docker-compose up -d
+
+# Check for security updates
+sudo apt list --upgradable
+```
+
+### Upgrade Application
+
+```bash
+# Stop service
+sudo systemctl stop ourstory.service
+
+# Pull latest code
+cd ~/ourstory
+git pull
+
+# Update containers
+docker-compose up -d --build
+
+# Start service
+sudo systemctl start ourstory.service
+
+# Verify
+sudo systemctl status ourstory.service
 ```
 
 ---
@@ -591,82 +535,236 @@ sudo systemctl restart ourstory-frontend
 ### 1. Firewall Configuration
 
 ```bash
-# Ubuntu server
-sudo ufw allow 22/tcp    # SSH
-sudo ufw allow 3001/tcp  # API (only for local, NPM handles public)
+# Ubuntu server - only allow SSH and local ports
+sudo ufw allow 22/tcp     # SSH
+sudo ufw allow 3000/tcp   # Frontend (localhost only)
+sudo ufw allow 3001/tcp   # Backend (localhost only)
 sudo ufw enable
 
 # Verify
 sudo ufw status
 ```
 
-### 2. Update System
+### 2. Change Default Credentials
+
+Before going to production:
 
 ```bash
-# Ubuntu
-sudo apt update && sudo apt upgrade -y
-sudo apt autoremove
+# 1. Change admin password
+nano ~/ourstory/ourstory-api/.env
+# Update: ADMIN_PASSWORD=changeme → ADMIN_PASSWORD=your-strong-password
 
-# Node.js dependencies
-cd /opt/ourstory-api
-npm audit fix
+# 2. Generate new JWT secret
+openssl rand -base64 32
+# Update: JWT_SECRET=your-generated-secret
+
+# 3. Restart service
+sudo systemctl restart ourstory.service
 ```
 
 ### 3. File Permissions
 
 ```bash
-# Restrict file access
-sudo chmod 750 /opt/ourstory-api
-sudo chmod 750 /var/lib/ourstory
-sudo chmod 640 /opt/ourstory-api/.env
+# Restrict .env file
+chmod 640 ~/ourstory/ourstory-api/.env
+
+# Restrict data directory
+chmod 750 ~/ourstory/data
+
+# Restrict uploads (if needed)
+chmod 755 /home/jesvin/Pictures
 ```
 
-### 4. Rate Limiting
+### 4. Environment Security
 
-Already enabled in auth routes (5 attempts/minute on login).
+```bash
+# Ensure .env is not in git
+echo "ourstory-api/.env" >> ~/.gitignore
 
-### 5. HTTPS Enforcement
+# Backup .env securely (encrypted)
+gpg --symmetric --cipher-algo AES256 ~/ourstory/ourstory-api/.env
+```
 
-All configured via NPM:
+### 5. Rate Limiting
 
-- Force SSL: Yes
-- HTTP/2: Yes
-- Security Headers: Recommended
+Already enabled in API:
+
+- Login: 5 attempts per minute per IP
+- Upload: 5 requests per minute per IP
+
+### 6. Regular Backups
+
+Backups include both database and photos:
+
+- `~/ourstory-backups/backup.sh` runs daily
+- Keeps last 30 days of backups
+- Test restore procedure monthly
 
 ---
 
-## Rollback Procedure
+## Recovery & Restore
+
+### From Backup
 
 ```bash
-# If deployment breaks
+# List backups
+ls -lh ~/ourstory-backups/
 
-# Backend rollback
-sudo systemctl stop ourstory-api
-cd /opt/ourstory-api
-git checkout previous-version  # or restore from backup
-npm install
-sudo systemctl start ourstory-api
+# Stop services
+sudo systemctl stop ourstory.service
 
-# Frontend rollback
-sudo systemctl stop ourstory-frontend
-cp /backups/previous-dist/* /opt/ourstory-frontend/
-sudo systemctl start ourstory-frontend
+# Restore specific backup
+cd ~
+tar -xzf ~/ourstory-backups/ourstory-backup-20250210_020000.tar.gz
+
+# Restart service
+sudo systemctl start ourstory.service
+
+# Verify
+docker-compose logs api
+curl http://localhost:3001/api/health
+```
+
+### Rollback to Previous Version
+
+```bash
+# Stop service
+sudo systemctl stop ourstory.service
+
+# Restore from git
+cd ~/ourstory
+git log --oneline | head -20  # See recent commits
+git checkout <commit-hash>
+
+# Restart
+sudo systemctl start ourstory.service
+```
+
+---
+
+## Monitoring & Logging
+
+### View Logs
+
+```bash
+# Service logs
+sudo journalctl -u ourstory.service -f
+
+# All containers
+cd ~/ourstory && docker-compose logs -f
+
+# Backend only
+docker-compose logs -f api
+
+# Frontend only
+docker-compose logs -f frontend
+
+# Last 100 lines
+sudo journalctl -u ourstory.service -n 100 -e
+```
+
+### Check Health
+
+```bash
+# Service status
+sudo systemctl status ourstory.service
+
+# Container status
+docker ps
+
+# API health check
+curl http://localhost:3001/api/health
+
+# Frontend check
+curl -I http://localhost:3000
+
+# Database check
+docker exec ourstory-api sqlite3 /app/data/db.sqlite "SELECT COUNT(*) FROM memories;"
+```
+
+### Monitor Resources
+
+```bash
+# Disk usage
+du -sh ~/ourstory/*
+df -h
+
+# Container stats
+docker stats
+
+# Memory/CPU
+top
+```
+
+---
+
+## Reference: Docker Compose File
+
+Expected structure of `docker-compose.yml`:
+
+```yaml
+version: "3.8"
+
+services:
+  api:
+    build: ./ourstory-api
+    ports:
+      - "3001:3001"
+    volumes:
+      - /home/jesvin/Pictures:/uploads
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+
+  frontend:
+    build: ./ourstory-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - /home/jesvin/Pictures:/uploads
+      - ./data:/app/data
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:3001
+    depends_on:
+      - api
+    restart: unless-stopped
 ```
 
 ---
 
 ## Getting Help
 
-### Logs to check
+### Quick Diagnostics
 
-1. **Backend:** `sudo journalctl -u ourstory-api -n 100 -e`
-2. **Frontend:** Browser console (F12) or `sudo journalctl -u ourstory-frontend -n 50`
-3. **Nginx:** `sudo tail -f /var/log/nginx/error.log`
+```bash
+# Full system check
+echo "=== Service Status ===" && sudo systemctl status ourstory.service && \
+echo -e "\n=== Containers ===" && docker ps && \
+echo -e "\n=== Backend Health ===" && curl http://localhost:3001/api/health && \
+echo -e "\n=== Frontend ===" && curl -I http://localhost:3000 && \
+echo -e "\n=== Disk Usage ===" && du -sh ~/ourstory/* /home/jesvin/Pictures
+```
 
-### Common Issues Resolved
+### Logs to Check
 
-See main README.md troubleshooting section.
+1. **Service:** `sudo journalctl -u ourstory.service -n 50`
+2. **API:** `docker-compose logs api | tail -50`
+3. **Frontend:** `docker-compose logs frontend | tail -50`
+
+### Common Issues
+
+| Issue               | Check                                                            | Fix                        |
+| ------------------- | ---------------------------------------------------------------- | -------------------------- |
+| Service won't start | `sudo journalctl -u ourstory.service`                            | Check Docker is running    |
+| Can't reach API     | `docker ps \| grep api`                                          | Check container is running |
+| Images not loading  | `ls -la /home/jesvin/Pictures`                                   | Check permissions          |
+| Database errors     | `docker exec ourstory-api sqlite3 /app/data/db.sqlite ".tables"` | Reinitialize DB            |
+| Port in use         | `sudo lsof -i :3000`                                             | Kill conflicting process   |
 
 ---
 
 **Deployed with ❤️**
+
+_Last updated: February 2025_
+_For Valentine's timeline: Our Story_
