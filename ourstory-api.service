@@ -1,0 +1,40 @@
+[Unit]
+Description=Our Story API Service
+Documentation=https://github.com/yourusername/ourstory-api
+After=network.target
+
+[Service]
+Type=simple
+User=ourstory
+WorkingDirectory=/opt/ourstory-api
+
+# Environment variables
+Environment="NODE_ENV=production"
+Environment="PORT=3001"
+Environment="DATABASE_PATH=/var/lib/ourstory/db.sqlite"
+Environment="UPLOAD_DIR=/var/lib/ourstory/uploads"
+EnvironmentFile=/opt/ourstory-api/.env
+
+# Process management
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ourstory-api
+
+# Security
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/ourstory
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=512
+
+[Install]
+WantedBy=multi-user.target
